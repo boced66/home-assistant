@@ -9,25 +9,23 @@ import logging
 import voluptuous as vol
 
 from homeassistant.components.media_player import (
-    MEDIA_TYPE_MUSIC, SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET,
-    SUPPORT_PAUSE, SUPPORT_SEEK, SUPPORT_STOP, SUPPORT_PLAY_MEDIA,
-    SUPPORT_PLAY, SUPPORT_NEXT_TRACK, PLATFORM_SCHEMA, MediaPlayerDevice)
-from homeassistant.const import (
-    STATE_IDLE, CONF_NAME, EVENT_HOMEASSISTANT_STOP)
+    MediaPlayerDevice, PLATFORM_SCHEMA)
+from homeassistant.components.media_player.const import (
+    MEDIA_TYPE_MUSIC, SUPPORT_NEXT_TRACK, SUPPORT_PAUSE,
+    SUPPORT_PLAY, SUPPORT_PLAY_MEDIA, SUPPORT_VOLUME_SET)
+from homeassistant.const import CONF_NAME, EVENT_HOMEASSISTANT_STOP, STATE_IDLE
 import homeassistant.helpers.config_validation as cv
 
+REQUIREMENTS = ['gstreamer-player==1.1.2']
 
 _LOGGER = logging.getLogger(__name__)
 
-
-REQUIREMENTS = ['gstreamer-player==1.0.0']
-DOMAIN = 'gstreamer'
 CONF_PIPELINE = 'pipeline'
 
+DOMAIN = 'gstreamer'
 
-SUPPORT_GSTREAMER = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_MUTE | \
-    SUPPORT_PLAY | SUPPORT_PAUSE | SUPPORT_SEEK | SUPPORT_STOP | \
-    SUPPORT_PLAY_MEDIA | SUPPORT_SEEK | SUPPORT_NEXT_TRACK
+SUPPORT_GSTREAMER = SUPPORT_VOLUME_SET | SUPPORT_PLAY | SUPPORT_PAUSE |\
+     SUPPORT_PLAY_MEDIA | SUPPORT_NEXT_TRACK
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_NAME): cv.string,
@@ -35,9 +33,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 
-# pylint: disable=unused-argument
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the Gstreamer platform."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the Gstreamer platform."""
     from gsp import GstreamerPlayer
     name = config.get(CONF_NAME)
     pipeline = config.get(CONF_PIPELINE)
@@ -48,7 +45,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         player.quit()
 
     hass.bus.listen_once(EVENT_HOMEASSISTANT_STOP, _shutdown)
-    add_devices([GstreamerDevice(player, name)])
+    add_entities([GstreamerDevice(player, name)])
 
 
 class GstreamerDevice(MediaPlayerDevice):
@@ -61,7 +58,6 @@ class GstreamerDevice(MediaPlayerDevice):
         self._state = STATE_IDLE
         self._volume = None
         self._duration = None
-        self._position = None
         self._uri = None
         self._title = None
         self._artist = None
@@ -72,15 +68,10 @@ class GstreamerDevice(MediaPlayerDevice):
         self._state = self._player.state
         self._volume = self._player.volume
         self._duration = self._player.duration
-        self._position = self._player.position
         self._uri = self._player.uri
         self._title = self._player.title
         self._album = self._player.album
         self._artist = self._player.artist
-
-    def mute_volume(self, mute):
-        """Send the mute command."""
-        self._player.mute()
 
     def set_volume_level(self, volume):
         """Set the volume level."""
@@ -93,9 +84,13 @@ class GstreamerDevice(MediaPlayerDevice):
             return
         self._player.queue(media_id)
 
-    def media_seek(self, position):
-        """Seek."""
-        self._player.position = position
+    def media_play(self):
+        """Play."""
+        self._player.play()
+
+    def media_pause(self):
+        """Pause."""
+        self._player.pause()
 
     def media_next_track(self):
         """Next track."""
@@ -122,11 +117,6 @@ class GstreamerDevice(MediaPlayerDevice):
         return self._volume
 
     @property
-    def is_volume_muted(self):
-        """Volume muted."""
-        return self._volume == 0
-
-    @property
     def supported_features(self):
         """Flag media player features that are supported."""
         return SUPPORT_GSTREAMER
@@ -140,11 +130,6 @@ class GstreamerDevice(MediaPlayerDevice):
     def media_duration(self):
         """Duration of current playing media in seconds."""
         return self._duration
-
-    @property
-    def media_position(self):
-        """Position of current playing media in seconds."""
-        return self._position
 
     @property
     def media_title(self):

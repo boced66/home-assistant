@@ -8,20 +8,24 @@ import logging
 
 import voluptuous as vol
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.const import CONF_NAME
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity import Entity
 
-REQUIREMENTS = ['py-cpuinfo==0.2.3']
+REQUIREMENTS = ['py-cpuinfo==4.0.0']
 
 _LOGGER = logging.getLogger(__name__)
 
 ATTR_BRAND = 'Brand'
 ATTR_HZ = 'GHz Advertised'
-ATTR_VENDOR = 'Vendor ID'
+ATTR_ARCH = 'arch'
+
+HZ_ACTUAL_RAW = 'hz_actual_raw'
+HZ_ADVERTISED_RAW = 'hz_advertised_raw'
 
 DEFAULT_NAME = 'CPU speed'
+
 ICON = 'mdi:pulse'
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -29,12 +33,11 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 
-# pylint: disable=unused-variable
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the CPU speed sensor."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the CPU speed sensor."""
     name = config.get(CONF_NAME)
 
-    add_devices([CpuSpeedSensor(name)])
+    add_entities([CpuSpeedSensor(name)], True)
 
 
 class CpuSpeedSensor(Entity):
@@ -44,8 +47,8 @@ class CpuSpeedSensor(Entity):
         """Initialize the sensor."""
         self._name = name
         self._state = None
+        self.info = None
         self._unit_of_measurement = 'GHz'
-        self.update()
 
     @property
     def name(self):
@@ -66,11 +69,16 @@ class CpuSpeedSensor(Entity):
     def device_state_attributes(self):
         """Return the state attributes."""
         if self.info is not None:
-            return {
-                ATTR_VENDOR: self.info['vendor_id'],
+            attrs = {
+                ATTR_ARCH: self.info['arch'],
                 ATTR_BRAND: self.info['brand'],
-                ATTR_HZ: round(self.info['hz_advertised_raw'][0]/10**9, 2)
             }
+
+            if HZ_ADVERTISED_RAW in self.info:
+                attrs[ATTR_HZ] = round(
+                    self.info[HZ_ADVERTISED_RAW][0] / 10 ** 9, 2
+                )
+            return attrs
 
     @property
     def icon(self):
@@ -82,4 +90,9 @@ class CpuSpeedSensor(Entity):
         from cpuinfo import cpuinfo
 
         self.info = cpuinfo.get_cpu_info()
-        self._state = round(float(self.info['hz_actual_raw'][0])/10**9, 2)
+        if HZ_ACTUAL_RAW in self.info:
+            self._state = round(
+                float(self.info[HZ_ACTUAL_RAW][0]) / 10 ** 9, 2
+            )
+        else:
+            self._state = None

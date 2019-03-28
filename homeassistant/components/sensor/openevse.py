@@ -4,29 +4,30 @@ Support for monitoring an OpenEVSE Charger.
 For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/sensor.openevse/
 """
-
 import logging
 
 from requests import RequestException
-
 import voluptuous as vol
 
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import PLATFORM_SCHEMA
-from homeassistant.const import TEMP_CELSIUS, CONF_HOST
-from homeassistant.const import CONF_MONITORED_VARIABLES
+from homeassistant.const import (
+    TEMP_CELSIUS, CONF_HOST, ENERGY_KILO_WATT_HOUR,
+    CONF_MONITORED_VARIABLES)
 from homeassistant.helpers.entity import Entity
 
-_LOGGER = logging.getLogger(__name__)
 REQUIREMENTS = ['openevsewifi==0.4']
+
+_LOGGER = logging.getLogger(__name__)
+
 SENSOR_TYPES = {
     'status': ['Charging Status', None],
     'charge_time': ['Charge Time Elapsed', 'minutes'],
-    'ambient_temp': ['Ambient Termperature', TEMP_CELSIUS],
+    'ambient_temp': ['Ambient Temperature', TEMP_CELSIUS],
     'ir_temp': ['IR Temperature', TEMP_CELSIUS],
     'rtc_temp': ['RTC Temperature', TEMP_CELSIUS],
-    'usage_session': ['Usage this Session', 'kWh'],
-    'usage_total': ['Total Usage', 'kWh']
+    'usage_session': ['Usage this Session', ENERGY_KILO_WATT_HOUR],
+    'usage_total': ['Total Usage', ENERGY_KILO_WATT_HOUR]
 }
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -36,7 +37,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
+def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up the OpenEVSE sensor."""
     import openevsewifi
 
@@ -49,13 +50,12 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     for variable in monitored_variables:
         dev.append(OpenEVSESensor(variable, charger))
 
-    add_devices(dev)
+    add_entities(dev, True)
 
 
 class OpenEVSESensor(Entity):
     """Implementation of an OpenEVSE sensor."""
 
-    # pylint: disable=too-many-arguments
     def __init__(self, sensor_type, charger):
         """Initialize the sensor."""
         self._name = SENSOR_TYPES[sensor_type][0]

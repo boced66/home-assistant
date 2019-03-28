@@ -5,44 +5,58 @@ For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/light.avion/
 """
 import logging
+import time
 
 import voluptuous as vol
 
-from homeassistant.const import CONF_API_KEY, CONF_DEVICES, CONF_NAME
 from homeassistant.components.light import (
-    ATTR_BRIGHTNESS, SUPPORT_BRIGHTNESS, Light,
-    PLATFORM_SCHEMA)
+    ATTR_BRIGHTNESS, PLATFORM_SCHEMA, SUPPORT_BRIGHTNESS, Light)
+from homeassistant.const import (
+    CONF_API_KEY, CONF_DEVICES, CONF_ID, CONF_NAME, CONF_PASSWORD,
+    CONF_USERNAME)
 import homeassistant.helpers.config_validation as cv
 
-REQUIREMENTS = ['avion==0.5']
+REQUIREMENTS = ['avion==0.10']
 
 _LOGGER = logging.getLogger(__name__)
 
-SUPPORT_AVION_LED = (SUPPORT_BRIGHTNESS)
+SUPPORT_AVION_LED = SUPPORT_BRIGHTNESS
 
 DEVICE_SCHEMA = vol.Schema({
-    vol.Optional(CONF_NAME): cv.string,
     vol.Required(CONF_API_KEY): cv.string,
+    vol.Optional(CONF_ID): cv.positive_int,
+    vol.Optional(CONF_NAME): cv.string,
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_DEVICES, default={}): {cv.string: DEVICE_SCHEMA},
+    vol.Optional(CONF_USERNAME): cv.string,
+    vol.Optional(CONF_PASSWORD): cv.string,
 })
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
+def setup_platform(hass, config, add_entities, discovery_info=None):
     """Set up an Avion switch."""
-    lights = []
-    for address, device_config in config[CONF_DEVICES].items():
-        device = {}
-        device['name'] = device_config[CONF_NAME]
-        device['key'] = device_config[CONF_API_KEY]
-        device['address'] = address
-        light = AvionLight(device)
-        if light.is_valid:
-            lights.append(light)
+    # pylint: disable=no-member
+    import avion
 
-    add_devices(lights)
+    lights = []
+    if CONF_USERNAME in config and CONF_PASSWORD in config:
+        devices = avion.get_devices(
+            config[CONF_USERNAME], config[CONF_PASSWORD])
+        for device in devices:
+            lights.append(AvionLight(device))
+
+    for address, device_config in config[CONF_DEVICES].items():
+        device = avion.Avion(
+            mac=address,
+            passphrase=device_config[CONF_API_KEY],
+            name=device_config.get(CONF_NAME),
+            object_id=device_config.get(CONF_ID),
+            connect=False)
+        lights.append(AvionLight(device))
+
+    add_entities(lights)
 
 
 class AvionLight(Light):
@@ -50,22 +64,16 @@ class AvionLight(Light):
 
     def __init__(self, device):
         """Initialize the light."""
-        # pylint: disable=import-error
-        import avion
-
-        self._name = device['name']
-        self._address = device['address']
-        self._key = device['key']
+        self._name = device.name
+        self._address = device.mac
         self._brightness = 255
         self._state = False
-        self._switch = avion.avion(self._address, self._key)
-        self._switch.connect()
-        self.is_valid = True
+        self._switch = device
 
     @property
     def unique_id(self):
         """Return the ID of this light."""
-        return "{}.{}".format(self.__class__, self._address)
+        return self._address
 
     @property
     def name(self):
@@ -99,7 +107,20 @@ class AvionLight(Light):
 
     def set_state(self, brightness):
         """Set the state of this lamp to the provided brightness."""
-        self._switch.set_brightness(brightness)
+        # pylint: disable=no-member
+        import avion
+
+        # Bluetooth LE is unreliable, and the connection may drop at any
+        # time. Make an effort to re-establish the link.
+        initial = time.monotonic()
+        while True:
+            if time.monotonic() - initial >= 10:
+                return False
+            try:
+                self._switch.set_brightness(brightness)
+                break
+            except avion.AvionException:
+                self._switch.connect()
         return True
 
     def turn_on(self, **kwargs):

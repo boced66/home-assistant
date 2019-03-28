@@ -30,12 +30,11 @@ SWITCH_SCHEMA = vol.Schema({
 })
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_SWITCHES): vol.Schema({cv.slug: SWITCH_SCHEMA}),
+    vol.Required(CONF_SWITCHES): cv.schema_with_slug_keys(SWITCH_SCHEMA),
 })
 
 
-# pylint: disable=unused-argument
-def setup_platform(hass, config, add_devices_callback, discovery_info=None):
+def setup_platform(hass, config, add_entities_callback, discovery_info=None):
     """Set up Kankun Wifi switches."""
     switches = config.get('switches', {})
     devices = []
@@ -51,14 +50,14 @@ def setup_platform(hass, config, add_devices_callback, discovery_info=None):
                 properties.get(CONF_USERNAME, None),
                 properties.get(CONF_PASSWORD)))
 
-    add_devices_callback(devices)
+    add_entities_callback(devices)
 
 
 class KankunSwitch(SwitchDevice):
     """Representation of a Kankun Wifi switch."""
 
     def __init__(self, hass, name, host, port, path, user, passwd):
-        """Initialise the device."""
+        """Initialize the device."""
         self._hass = hass
         self._name = name
         self._state = False
@@ -92,17 +91,17 @@ class KankunSwitch(SwitchDevice):
 
     @property
     def should_poll(self):
-        """Switch should always be polled."""
+        """Return the polling state."""
         return True
 
     @property
     def name(self):
-        """The name of the switch."""
+        """Return the name of the switch."""
         return self._name
 
     @property
     def is_on(self):
-        """True if device is on."""
+        """Return true if device is on."""
         return self._state
 
     def update(self):

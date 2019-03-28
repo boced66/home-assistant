@@ -1,396 +1,320 @@
 """The tests for the sun automation."""
 from datetime import datetime
 
-import unittest
+import pytest
 from unittest.mock import patch
 
-from homeassistant.core import callback
-from homeassistant.bootstrap import setup_component
+from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
+from homeassistant.setup import async_setup_component
 from homeassistant.components import sun
 import homeassistant.components.automation as automation
 import homeassistant.util.dt as dt_util
 
-from tests.common import fire_time_changed, get_test_home_assistant
+from tests.common import (
+    async_fire_time_changed, mock_component, async_mock_service)
+from tests.components.automation import common
 
 
-# pylint: disable=invalid-name
-class TestAutomationSun(unittest.TestCase):
-    """Test the sun automation."""
+@pytest.fixture
+def calls(hass):
+    """Track calls to a mock serivce."""
+    return async_mock_service(hass, 'test', 'automation')
 
-    def setUp(self):
-        """Setup things to be run when tests are started."""
-        self.hass = get_test_home_assistant()
-        self.hass.config.components.add('group')
-        self.hass.config.components.add('sun')
 
-        self.calls = []
+@pytest.fixture(autouse=True)
+def setup_comp(hass):
+    """Initialize components."""
+    mock_component(hass, 'group')
+    hass.loop.run_until_complete(async_setup_component(hass, sun.DOMAIN, {
+            sun.DOMAIN: {sun.CONF_ELEVATION: 0}}))
 
-        @callback
-        def record_call(service):
-            """Call recorder."""
-            self.calls.append(service)
 
-        self.hass.services.register('test', 'automation', record_call)
+async def test_sunset_trigger(hass, calls):
+    """Test the sunset trigger."""
+    now = datetime(2015, 9, 15, 23, tzinfo=dt_util.UTC)
+    trigger_time = datetime(2015, 9, 16, 2, tzinfo=dt_util.UTC)
 
-    def tearDown(self):
-        """Stop everything that was started."""
-        self.hass.stop()
-
-    def test_sunset_trigger(self):
-        """Test the sunset trigger."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_SETTING: '2015-09-16T02:00:00Z',
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        await async_setup_component(hass, automation.DOMAIN, {
+            automation.DOMAIN: {
+                'trigger': {
+                    'platform': 'sun',
+                    'event': SUN_EVENT_SUNSET,
+                },
+                'action': {
+                    'service': 'test.automation',
+                }
+            }
         })
 
-        now = datetime(2015, 9, 15, 23, tzinfo=dt_util.UTC)
-        trigger_time = datetime(2015, 9, 16, 2, tzinfo=dt_util.UTC)
+    await common.async_turn_off(hass)
+    await hass.async_block_till_done()
 
-        with patch('homeassistant.util.dt.utcnow',
-                   return_value=now):
-            setup_component(self.hass, automation.DOMAIN, {
-                automation.DOMAIN: {
-                    'trigger': {
-                        'platform': 'sun',
-                        'event': 'sunset',
+    async_fire_time_changed(hass, trigger_time)
+    await hass.async_block_till_done()
+    assert 0 == len(calls)
+
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        await common.async_turn_on(hass)
+        await hass.async_block_till_done()
+
+    async_fire_time_changed(hass, trigger_time)
+    await hass.async_block_till_done()
+    assert 1 == len(calls)
+
+
+async def test_sunrise_trigger(hass, calls):
+    """Test the sunrise trigger."""
+    now = datetime(2015, 9, 13, 23, tzinfo=dt_util.UTC)
+    trigger_time = datetime(2015, 9, 16, 14, tzinfo=dt_util.UTC)
+
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        await async_setup_component(hass, automation.DOMAIN, {
+            automation.DOMAIN: {
+                'trigger': {
+                    'platform': 'sun',
+                    'event': SUN_EVENT_SUNRISE,
+                },
+                'action': {
+                    'service': 'test.automation',
+                }
+            }
+        })
+
+    async_fire_time_changed(hass, trigger_time)
+    await hass.async_block_till_done()
+    assert 1 == len(calls)
+
+
+async def test_sunset_trigger_with_offset(hass, calls):
+    """Test the sunset trigger with offset."""
+    now = datetime(2015, 9, 15, 23, tzinfo=dt_util.UTC)
+    trigger_time = datetime(2015, 9, 16, 2, 30, tzinfo=dt_util.UTC)
+
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        await async_setup_component(hass, automation.DOMAIN, {
+            automation.DOMAIN: {
+                'trigger': {
+                    'platform': 'sun',
+                    'event': SUN_EVENT_SUNSET,
+                    'offset': '0:30:00'
+                },
+                'action': {
+                    'service': 'test.automation',
+                    'data_template': {
+                        'some':
+                        '{{ trigger.%s }}' % '}} - {{ trigger.'.join((
+                            'platform', 'event', 'offset'))
                     },
-                    'action': {
-                        'service': 'test.automation',
-                    }
-                }
-            })
-
-        automation.turn_off(self.hass)
-        self.hass.block_till_done()
-
-        fire_time_changed(self.hass, trigger_time)
-        self.hass.block_till_done()
-        self.assertEqual(0, len(self.calls))
-
-        with patch('homeassistant.util.dt.utcnow',
-                   return_value=now):
-            automation.turn_on(self.hass)
-            self.hass.block_till_done()
-
-        fire_time_changed(self.hass, trigger_time)
-        self.hass.block_till_done()
-        self.assertEqual(1, len(self.calls))
-
-    def test_sunrise_trigger(self):
-        """Test the sunrise trigger."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T14:00:00Z',
-        })
-
-        now = datetime(2015, 9, 13, 23, tzinfo=dt_util.UTC)
-        trigger_time = datetime(2015, 9, 16, 14, tzinfo=dt_util.UTC)
-
-        with patch('homeassistant.util.dt.utcnow',
-                   return_value=now):
-            setup_component(self.hass, automation.DOMAIN, {
-                automation.DOMAIN: {
-                    'trigger': {
-                        'platform': 'sun',
-                        'event': 'sunrise',
-                    },
-                    'action': {
-                        'service': 'test.automation',
-                    }
-                }
-            })
-
-        fire_time_changed(self.hass, trigger_time)
-        self.hass.block_till_done()
-        self.assertEqual(1, len(self.calls))
-
-    def test_sunset_trigger_with_offset(self):
-        """Test the sunset trigger with offset."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_SETTING: '2015-09-16T02:00:00Z',
-        })
-
-        now = datetime(2015, 9, 15, 23, tzinfo=dt_util.UTC)
-        trigger_time = datetime(2015, 9, 16, 2, 30, tzinfo=dt_util.UTC)
-
-        with patch('homeassistant.util.dt.utcnow',
-                   return_value=now):
-            setup_component(self.hass, automation.DOMAIN, {
-                automation.DOMAIN: {
-                    'trigger': {
-                        'platform': 'sun',
-                        'event': 'sunset',
-                        'offset': '0:30:00'
-                    },
-                    'action': {
-                        'service': 'test.automation',
-                        'data_template': {
-                            'some':
-                            '{{ trigger.%s }}' % '}} - {{ trigger.'.join((
-                                'platform', 'event', 'offset'))
-                        },
-                    }
-                }
-            })
-
-        fire_time_changed(self.hass, trigger_time)
-        self.hass.block_till_done()
-        self.assertEqual(1, len(self.calls))
-        self.assertEqual('sun - sunset - 0:30:00', self.calls[0].data['some'])
-
-    def test_sunrise_trigger_with_offset(self):
-        """Test the runrise trigger with offset."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T14:00:00Z',
-        })
-
-        now = datetime(2015, 9, 13, 23, tzinfo=dt_util.UTC)
-        trigger_time = datetime(2015, 9, 16, 13, 30, tzinfo=dt_util.UTC)
-
-        with patch('homeassistant.util.dt.utcnow',
-                   return_value=now):
-            setup_component(self.hass, automation.DOMAIN, {
-                automation.DOMAIN: {
-                    'trigger': {
-                        'platform': 'sun',
-                        'event': 'sunrise',
-                        'offset': '-0:30:00'
-                    },
-                    'action': {
-                        'service': 'test.automation',
-                    }
-                }
-            })
-
-        fire_time_changed(self.hass, trigger_time)
-        self.hass.block_till_done()
-        self.assertEqual(1, len(self.calls))
-
-    def test_if_action_before(self):
-        """Test if action was before."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T14:00:00Z',
-        })
-
-        setup_component(self.hass, automation.DOMAIN, {
-            automation.DOMAIN: {
-                'trigger': {
-                    'platform': 'event',
-                    'event_type': 'test_event',
-                },
-                'condition': {
-                    'condition': 'sun',
-                    'before': 'sunrise',
-                },
-                'action': {
-                    'service': 'test.automation'
                 }
             }
         })
 
-        now = datetime(2015, 9, 16, 15, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    async_fire_time_changed(hass, trigger_time)
+    await hass.async_block_till_done()
+    assert 1 == len(calls)
+    assert 'sun - sunset - 0:30:00' == calls[0].data['some']
 
-        now = datetime(2015, 9, 16, 10, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(1, len(self.calls))
 
-    def test_if_action_after(self):
-        """Test if action was after."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T14:00:00Z',
-        })
+async def test_sunrise_trigger_with_offset(hass, calls):
+    """Test the sunrise trigger with offset."""
+    now = datetime(2015, 9, 13, 23, tzinfo=dt_util.UTC)
+    trigger_time = datetime(2015, 9, 16, 13, 30, tzinfo=dt_util.UTC)
 
-        setup_component(self.hass, automation.DOMAIN, {
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        await async_setup_component(hass, automation.DOMAIN, {
             automation.DOMAIN: {
                 'trigger': {
-                    'platform': 'event',
-                    'event_type': 'test_event',
-                },
-                'condition': {
-                    'condition': 'sun',
-                    'after': 'sunrise',
+                    'platform': 'sun',
+                    'event': SUN_EVENT_SUNRISE,
+                    'offset': '-0:30:00'
                 },
                 'action': {
-                    'service': 'test.automation'
+                    'service': 'test.automation',
                 }
             }
         })
 
-        now = datetime(2015, 9, 16, 13, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    async_fire_time_changed(hass, trigger_time)
+    await hass.async_block_till_done()
+    assert 1 == len(calls)
 
-        now = datetime(2015, 9, 16, 15, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(1, len(self.calls))
 
-    def test_if_action_before_with_offset(self):
-        """Test if action was before offset."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T14:00:00Z',
-        })
-
-        setup_component(self.hass, automation.DOMAIN, {
-            automation.DOMAIN: {
-                'trigger': {
-                    'platform': 'event',
-                    'event_type': 'test_event',
-                },
-                'condition': {
-                    'condition': 'sun',
-                    'before': 'sunrise',
-                    'before_offset': '+1:00:00'
-                },
-                'action': {
-                    'service': 'test.automation'
-                }
+async def test_if_action_before(hass, calls):
+    """Test if action was before."""
+    await async_setup_component(hass, automation.DOMAIN, {
+        automation.DOMAIN: {
+            'trigger': {
+                'platform': 'event',
+                'event_type': 'test_event',
+            },
+            'condition': {
+                'condition': 'sun',
+                'before': SUN_EVENT_SUNRISE,
+            },
+            'action': {
+                'service': 'test.automation'
             }
-        })
+        }
+    })
 
-        now = datetime(2015, 9, 16, 15, 1, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    now = datetime(2015, 9, 16, 15, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 0 == len(calls)
 
-        now = datetime(2015, 9, 16, 15, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(1, len(self.calls))
+    now = datetime(2015, 9, 16, 10, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 1 == len(calls)
 
-    def test_if_action_after_with_offset(self):
-        """Test if action was after offset."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T14:00:00Z',
-        })
 
-        setup_component(self.hass, automation.DOMAIN, {
-            automation.DOMAIN: {
-                'trigger': {
-                    'platform': 'event',
-                    'event_type': 'test_event',
-                },
-                'condition': {
-                    'condition': 'sun',
-                    'after': 'sunrise',
-                    'after_offset': '+1:00:00'
-                },
-                'action': {
-                    'service': 'test.automation'
-                }
+async def test_if_action_after(hass, calls):
+    """Test if action was after."""
+    await async_setup_component(hass, automation.DOMAIN, {
+        automation.DOMAIN: {
+            'trigger': {
+                'platform': 'event',
+                'event_type': 'test_event',
+            },
+            'condition': {
+                'condition': 'sun',
+                'after': SUN_EVENT_SUNRISE,
+            },
+            'action': {
+                'service': 'test.automation'
             }
-        })
+        }
+    })
 
-        now = datetime(2015, 9, 16, 14, 59, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    now = datetime(2015, 9, 16, 13, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 0 == len(calls)
 
-        now = datetime(2015, 9, 16, 15, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(1, len(self.calls))
+    now = datetime(2015, 9, 16, 15, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 1 == len(calls)
 
-    def test_if_action_before_and_after_during(self):
-        """Test if action was before and after during."""
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_RISING: '2015-09-16T10:00:00Z',
-            sun.STATE_ATTR_NEXT_SETTING: '2015-09-16T15:00:00Z',
-        })
 
-        setup_component(self.hass, automation.DOMAIN, {
-            automation.DOMAIN: {
-                'trigger': {
-                    'platform': 'event',
-                    'event_type': 'test_event',
-                },
-                'condition': {
-                    'condition': 'sun',
-                    'after': 'sunrise',
-                    'before': 'sunset'
-                },
-                'action': {
-                    'service': 'test.automation'
-                }
+async def test_if_action_before_with_offset(hass, calls):
+    """Test if action was before offset."""
+    await async_setup_component(hass, automation.DOMAIN, {
+        automation.DOMAIN: {
+            'trigger': {
+                'platform': 'event',
+                'event_type': 'test_event',
+            },
+            'condition': {
+                'condition': 'sun',
+                'before': SUN_EVENT_SUNRISE,
+                'before_offset': '+1:00:00'
+            },
+            'action': {
+                'service': 'test.automation'
             }
-        })
+        }
+    })
 
-        now = datetime(2015, 9, 16, 9, 59, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    now = datetime(2015, 9, 16, 14, 32, 44, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 0 == len(calls)
 
-        now = datetime(2015, 9, 16, 15, 1, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    now = datetime(2015, 9, 16, 14, 32, 43, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 1 == len(calls)
 
-        now = datetime(2015, 9, 16, 12, tzinfo=dt_util.UTC)
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(1, len(self.calls))
 
-    def test_if_action_after_different_tz(self):
-        """Test if action was after in a different timezone."""
-        import pytz
-
-        self.hass.states.set(sun.ENTITY_ID, sun.STATE_ABOVE_HORIZON, {
-            sun.STATE_ATTR_NEXT_SETTING: '2015-09-16T17:30:00Z',
-        })
-
-        setup_component(self.hass, automation.DOMAIN, {
-            automation.DOMAIN: {
-                'trigger': {
-                    'platform': 'event',
-                    'event_type': 'test_event',
-                },
-                'condition': {
-                    'condition': 'sun',
-                    'after': 'sunset',
-                },
-                'action': {
-                    'service': 'test.automation'
-                }
+async def test_if_action_after_with_offset(hass, calls):
+    """Test if action was after offset."""
+    await async_setup_component(hass, automation.DOMAIN, {
+        automation.DOMAIN: {
+            'trigger': {
+                'platform': 'event',
+                'event_type': 'test_event',
+            },
+            'condition': {
+                'condition': 'sun',
+                'after': SUN_EVENT_SUNRISE,
+                'after_offset': '+1:00:00'
+            },
+            'action': {
+                'service': 'test.automation'
             }
-        })
+        }
+    })
 
-        # Before
-        now = datetime(2015, 9, 16, 17, tzinfo=pytz.timezone('US/Mountain'))
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(0, len(self.calls))
+    now = datetime(2015, 9, 16, 14, 32, 42, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 0 == len(calls)
 
-        # After
-        now = datetime(2015, 9, 16, 18, tzinfo=pytz.timezone('US/Mountain'))
-        with patch('homeassistant.util.dt.now',
-                   return_value=now):
-            self.hass.bus.fire('test_event')
-            self.hass.block_till_done()
-            self.assertEqual(1, len(self.calls))
+    now = datetime(2015, 9, 16, 14, 32, 43, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 1 == len(calls)
+
+
+async def test_if_action_before_and_after_during(hass, calls):
+    """Test if action was before and after during."""
+    await async_setup_component(hass, automation.DOMAIN, {
+        automation.DOMAIN: {
+            'trigger': {
+                'platform': 'event',
+                'event_type': 'test_event',
+            },
+            'condition': {
+                'condition': 'sun',
+                'after': SUN_EVENT_SUNRISE,
+                'before': SUN_EVENT_SUNSET
+            },
+            'action': {
+                'service': 'test.automation'
+            }
+        }
+    })
+
+    now = datetime(2015, 9, 16, 13, 8, 51, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 0 == len(calls)
+
+    now = datetime(2015, 9, 17, 2, 25, 18, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 0 == len(calls)
+
+    now = datetime(2015, 9, 16, 16, tzinfo=dt_util.UTC)
+    with patch('homeassistant.util.dt.utcnow',
+               return_value=now):
+        hass.bus.async_fire('test_event')
+        await hass.async_block_till_done()
+        assert 1 == len(calls)

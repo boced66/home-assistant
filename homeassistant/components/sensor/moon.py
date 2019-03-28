@@ -4,7 +4,6 @@ Support for tracking the moon phases.
 For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/sensor.moon/
 """
-import asyncio
 import logging
 
 import voluptuous as vol
@@ -14,8 +13,6 @@ from homeassistant.const import (CONF_NAME)
 import homeassistant.util.dt as dt_util
 from homeassistant.helpers.entity import Entity
 import homeassistant.helpers.config_validation as cv
-
-REQUIREMENTS = ['astral==1.3.4']
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,13 +25,12 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 
-@asyncio.coroutine
-def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
+async def async_setup_platform(
+        hass, config, async_add_entities, discovery_info=None):
     """Set up the Moon sensor."""
     name = config.get(CONF_NAME)
 
-    yield from async_add_devices([MoonSensor(name)], True)
-    return True
+    async_add_entities([MoonSensor(name)], True)
 
 
 class MoonSensor(Entity):
@@ -53,22 +49,28 @@ class MoonSensor(Entity):
     @property
     def state(self):
         """Return the state of the device."""
-        if self._state >= 21:
-            return 'Last quarter'
-        elif self._state >= 14:
-            return 'Full moon'
-        elif self._state >= 7:
-            return 'First quarter'
-        else:
-            return 'New moon'
+        if self._state == 0:
+            return 'new_moon'
+        if self._state < 7:
+            return 'waxing_crescent'
+        if self._state == 7:
+            return 'first_quarter'
+        if self._state < 14:
+            return 'waxing_gibbous'
+        if self._state == 14:
+            return 'full_moon'
+        if self._state < 21:
+            return 'waning_gibbous'
+        if self._state == 21:
+            return 'last_quarter'
+        return 'waning_crescent'
 
     @property
     def icon(self):
         """Icon to use in the frontend, if any."""
         return ICON
 
-    @asyncio.coroutine
-    def async_update(self):
+    async def async_update(self):
         """Get the time and updates the states."""
         from astral import Astral
 

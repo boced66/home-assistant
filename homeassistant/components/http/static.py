@@ -1,65 +1,44 @@
 """Static file handling for HTTP component."""
-import asyncio
-import re
+from pathlib import Path
 
 from aiohttp import hdrs
-from aiohttp.file_sender import FileSender
+from aiohttp.web import FileResponse
+from aiohttp.web_exceptions import HTTPNotFound, HTTPForbidden
 from aiohttp.web_urldispatcher import StaticResource
-from .const import KEY_DEVELOPMENT
 
-_FINGERPRINT = re.compile(r'^(.+)-[a-z0-9]{32}\.(\w+)$', re.IGNORECASE)
-
-
-class CachingFileSender(FileSender):
-    """FileSender class that caches output if not in dev mode."""
-
-    def __init__(self, *args, **kwargs):
-        """Initialize the hass file sender."""
-        super().__init__(*args, **kwargs)
-
-        orig_sendfile = self._sendfile
-
-        @asyncio.coroutine
-        def sendfile(request, resp, fobj, count):
-            """Sendfile that includes a cache header."""
-            if not request.app[KEY_DEVELOPMENT]:
-                cache_time = 31 * 86400  # = 1 month
-                resp.headers[hdrs.CACHE_CONTROL] = "public, max-age={}".format(
-                    cache_time)
-
-            yield from orig_sendfile(request, resp, fobj, count)
-
-        # Overwriting like this because __init__ can change implementation.
-        self._sendfile = sendfile
+CACHE_TIME = 31 * 86400  # = 1 month
+CACHE_HEADERS = {hdrs.CACHE_CONTROL: "public, max-age={}".format(CACHE_TIME)}
 
 
-FILE_SENDER = FileSender()
-CACHING_FILE_SENDER = CachingFileSender()
+# https://github.com/PyCQA/astroid/issues/633
+# pylint: disable=duplicate-bases
+class CachingStaticResource(StaticResource):
+    """Static Resource handler that will add cache headers."""
 
+    async def _handle(self, request):
+        rel_url = request.match_info['filename']
+        try:
+            filename = Path(rel_url)
+            if filename.anchor:
+                # rel_url is an absolute name like
+                # /static/\\machine_name\c$ or /static/D:\path
+                # where the static dir is totally different
+                raise HTTPForbidden()
+            filepath = self._directory.joinpath(filename).resolve()
+            if not self._follow_symlinks:
+                filepath.relative_to(self._directory)
+        except (ValueError, FileNotFoundError) as error:
+            # relatively safe
+            raise HTTPNotFound() from error
+        except Exception as error:
+            # perm error or other kind!
+            request.app.logger.exception(error)
+            raise HTTPNotFound() from error
 
-@asyncio.coroutine
-def staticresource_middleware(app, handler):
-    """Enhance StaticResourceHandler middleware.
-
-    Adds gzip encoding and fingerprinting matching.
-    """
-    inst = getattr(handler, '__self__', None)
-    if not isinstance(inst, StaticResource):
-        return handler
-
-    # pylint: disable=protected-access
-    inst._file_sender = CACHING_FILE_SENDER
-
-    @asyncio.coroutine
-    def static_middleware_handler(request):
-        """Strip out fingerprints from resource names."""
-        fingerprinted = _FINGERPRINT.match(request.match_info['filename'])
-
-        if fingerprinted:
-            request.match_info['filename'] = \
-                '{}.{}'.format(*fingerprinted.groups())
-
-        resp = yield from handler(request)
-        return resp
-
-    return static_middleware_handler
+        # on opening a dir, load its contents if allowed
+        if filepath.is_dir():
+            return await super()._handle(request)
+        if filepath.is_file():
+            return FileResponse(
+                filepath, chunk_size=self._chunk_size, headers=CACHE_HEADERS)
+        raise HTTPNotFound

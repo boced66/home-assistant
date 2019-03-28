@@ -14,17 +14,18 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.components.sensor.rest import RestData
 from homeassistant.const import (
     CONF_PAYLOAD, CONF_NAME, CONF_VALUE_TEMPLATE, CONF_METHOD, CONF_RESOURCE,
-    CONF_SENSOR_CLASS, CONF_VERIFY_SSL, CONF_USERNAME, CONF_PASSWORD,
+    CONF_VERIFY_SSL, CONF_USERNAME, CONF_PASSWORD, CONF_TIMEOUT,
     CONF_HEADERS, CONF_AUTHENTICATION, HTTP_BASIC_AUTHENTICATION,
     HTTP_DIGEST_AUTHENTICATION, CONF_DEVICE_CLASS)
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.deprecation import get_deprecated
+from homeassistant.exceptions import PlatformNotReady
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_METHOD = 'GET'
 DEFAULT_NAME = 'REST Binary Sensor'
 DEFAULT_VERIFY_SSL = True
+DEFAULT_TIMEOUT = 10
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_RESOURCE): cv.url,
@@ -35,25 +36,26 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     vol.Optional(CONF_PASSWORD): cv.string,
     vol.Optional(CONF_PAYLOAD): cv.string,
-    vol.Optional(CONF_SENSOR_CLASS): DEVICE_CLASSES_SCHEMA,
     vol.Optional(CONF_DEVICE_CLASS): DEVICE_CLASSES_SCHEMA,
     vol.Optional(CONF_USERNAME): cv.string,
     vol.Optional(CONF_VALUE_TEMPLATE): cv.template,
     vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
+    vol.Optional(CONF_TIMEOUT, default=DEFAULT_TIMEOUT): cv.positive_int,
 })
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the REST binary sensor."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the REST binary sensor."""
     name = config.get(CONF_NAME)
     resource = config.get(CONF_RESOURCE)
     method = config.get(CONF_METHOD)
     payload = config.get(CONF_PAYLOAD)
     verify_ssl = config.get(CONF_VERIFY_SSL)
+    timeout = config.get(CONF_TIMEOUT)
     username = config.get(CONF_USERNAME)
     password = config.get(CONF_PASSWORD)
     headers = config.get(CONF_HEADERS)
-    device_class = get_deprecated(config, CONF_DEVICE_CLASS, CONF_SENSOR_CLASS)
+    device_class = config.get(CONF_DEVICE_CLASS)
     value_template = config.get(CONF_VALUE_TEMPLATE)
     if value_template is not None:
         value_template.hass = hass
@@ -66,14 +68,15 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     else:
         auth = None
 
-    rest = RestData(method, resource, auth, headers, payload, verify_ssl)
+    rest = RestData(method, resource, auth, headers, payload, verify_ssl,
+                    timeout)
     rest.update()
-
     if rest.data is None:
-        _LOGGER.error("Unable to fetch REST data from %s", resource)
-        return False
+        raise PlatformNotReady
 
-    add_devices([RestBinarySensor(
+    # No need to update the sensor now because it will determine its state
+    # based in the rest resource that has just been retrieved.
+    add_entities([RestBinarySensor(
         hass, rest, name, device_class, value_template)])
 
 
@@ -89,7 +92,6 @@ class RestBinarySensor(BinarySensorDevice):
         self._state = False
         self._previous_data = None
         self._value_template = value_template
-        self.update()
 
     @property
     def name(self):
@@ -102,10 +104,17 @@ class RestBinarySensor(BinarySensorDevice):
         return self._device_class
 
     @property
+    def available(self):
+        """Return the availability of this sensor."""
+        return self.rest.data is not None
+
+    @property
     def is_on(self):
         """Return true if the binary sensor is on."""
         if self.rest.data is None:
             return False
+
+        response = self.rest.data
 
         if self._value_template is not None:
             response = self._value_template.\
@@ -114,8 +123,8 @@ class RestBinarySensor(BinarySensorDevice):
         try:
             return bool(int(response))
         except ValueError:
-            return {"true": True, "on": True, "open": True,
-                    "yes": True}.get(response.lower(), False)
+            return {'true': True, 'on': True, 'open': True,
+                    'yes': True}.get(response.lower(), False)
 
     def update(self):
         """Get the latest data from REST API and updates the state."""

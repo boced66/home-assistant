@@ -1,17 +1,18 @@
 """
-Component that will help set the openalpr cloud for alpr processing.
+Component that will help set the OpenALPR cloud for ALPR processing.
 
-For more details about this component, please refer to the documentation at
+For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/image_processing.openalpr_cloud/
 """
 import asyncio
-from base64 import b64encode
 import logging
+from base64 import b64encode
 
 import aiohttp
 import async_timeout
 import voluptuous as vol
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.core import split_entity_id
 from homeassistant.const import CONF_API_KEY
 from homeassistant.components.image_processing import (
@@ -19,7 +20,6 @@ from homeassistant.components.image_processing import (
 from homeassistant.components.image_processing.openalpr_local import (
     ImageProcessingAlprEntity)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-import homeassistant.helpers.config_validation as cv
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,14 +44,13 @@ CONF_REGION = 'region'
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_API_KEY): cv.string,
-    vol.Required(CONF_REGION):
-        vol.All(vol.Lower, vol.In(OPENALPR_REGIONS)),
+    vol.Required(CONF_REGION): vol.All(vol.Lower, vol.In(OPENALPR_REGIONS)),
 })
 
 
-@asyncio.coroutine
-def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
-    """Set up the openalpr cloud api platform."""
+async def async_setup_platform(hass, config, async_add_entities,
+                               discovery_info=None):
+    """Set up the OpenALPR cloud API platform."""
     confidence = config[CONF_CONFIDENCE]
     params = {
         'secret_key': config[CONF_API_KEY],
@@ -66,14 +65,14 @@ def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
             camera[CONF_ENTITY_ID], params, confidence, camera.get(CONF_NAME)
         ))
 
-    yield from async_add_devices(entities)
+    async_add_entities(entities)
 
 
 class OpenAlprCloudEntity(ImageProcessingAlprEntity):
-    """OpenAlpr cloud entity."""
+    """Representation of an OpenALPR cloud entity."""
 
     def __init__(self, camera_entity, params, confidence, name=None):
-        """Initialize openalpr local api."""
+        """Initialize OpenALPR cloud API."""
         super().__init__()
 
         self._params = params
@@ -101,8 +100,7 @@ class OpenAlprCloudEntity(ImageProcessingAlprEntity):
         """Return the name of the entity."""
         return self._name
 
-    @asyncio.coroutine
-    def async_process_image(self, image):
+    async def async_process_image(self, image):
         """Process image.
 
         This method is a coroutine.
@@ -110,32 +108,28 @@ class OpenAlprCloudEntity(ImageProcessingAlprEntity):
         websession = async_get_clientsession(self.hass)
         params = self._params.copy()
 
-        params['image_bytes'] = str(b64encode(image), 'utf-8')
+        body = {
+            'image_bytes': str(b64encode(image), 'utf-8')
+        }
 
-        data = None
-        request = None
         try:
             with async_timeout.timeout(self.timeout, loop=self.hass.loop):
-                request = yield from websession.post(
-                    OPENALPR_API_URL, params=params
+                request = await websession.post(
+                    OPENALPR_API_URL, params=params, data=body
                 )
 
-                data = yield from request.json()
+                data = await request.json()
 
                 if request.status != 200:
                     _LOGGER.error("Error %d -> %s.",
                                   request.status, data.get('error'))
                     return
 
-        except (asyncio.TimeoutError, aiohttp.errors.ClientError):
-            _LOGGER.error("Timeout for openalpr api.")
+        except (asyncio.TimeoutError, aiohttp.ClientError):
+            _LOGGER.error("Timeout for OpenALPR API")
             return
 
-        finally:
-            if request is not None:
-                yield from request.release()
-
-        # processing api data
+        # Processing API data
         vehicles = 0
         result = {}
 

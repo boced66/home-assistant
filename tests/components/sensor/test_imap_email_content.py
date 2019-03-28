@@ -4,7 +4,6 @@ import email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import datetime
-from threading import Event
 import unittest
 
 from homeassistant.helpers.template import Template
@@ -18,7 +17,7 @@ class FakeEMailReader:
     """A test class for sending test emails."""
 
     def __init__(self, messages):
-        """Setup the fake email reader."""
+        """Set up the fake email reader."""
         self._messages = messages
 
     def connect(self):
@@ -36,7 +35,7 @@ class EmailContentSensor(unittest.TestCase):
     """Test the IMAP email content sensor."""
 
     def setUp(self):
-        """Setup things to be run when tests are started."""
+        """Set up things to be run when tests are started."""
         self.hass = get_test_home_assistant()
 
     def tearDown(self):
@@ -59,13 +58,16 @@ class EmailContentSensor(unittest.TestCase):
             None)
 
         sensor.entity_id = 'sensor.emailtest'
-        sensor.update()
-        self.assertEqual("Test Message", sensor.state)
-        self.assertEqual('sender@test.com',
-                         sensor.device_state_attributes['from'])
-        self.assertEqual('Test', sensor.device_state_attributes['subject'])
-        self.assertEqual(datetime.datetime(2016, 1, 1, 12, 44, 57),
-                         sensor.device_state_attributes['date'])
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
+        assert 'Test' == sensor.state
+        assert "Test Message" == \
+            sensor.device_state_attributes['body']
+        assert 'sender@test.com' == \
+            sensor.device_state_attributes['from']
+        assert 'Test' == sensor.device_state_attributes['subject']
+        assert datetime.datetime(2016, 1, 1, 12, 44, 57) == \
+            sensor.device_state_attributes['date']
 
     def test_multi_part_with_text(self):
         """Test multi part emails."""
@@ -87,14 +89,17 @@ class EmailContentSensor(unittest.TestCase):
             ['sender@test.com'], None)
 
         sensor.entity_id = "sensor.emailtest"
-        sensor.update()
-        self.assertEqual("Test Message", sensor.state)
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
+        assert 'Link' == sensor.state
+        assert "Test Message" == \
+            sensor.device_state_attributes['body']
 
     def test_multi_part_only_html(self):
         """Test multi part emails with only HTML."""
         msg = MIMEMultipart('alternative')
-        msg['Subject'] = "Link"
-        msg['From'] = "sender@test.com"
+        msg['Subject'] = 'Link'
+        msg['From'] = 'sender@test.com'
 
         html = "<html><head></head><body>Test Message</body></html>"
 
@@ -110,10 +115,11 @@ class EmailContentSensor(unittest.TestCase):
             None)
 
         sensor.entity_id = 'sensor.emailtest'
-        sensor.update()
-        self.assertEqual(
-            "<html><head></head><body>Test Message</body></html>",
-            sensor.state)
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
+        assert 'Link' == sensor.state
+        assert "<html><head></head><body>Test Message</body></html>" == \
+            sensor.device_state_attributes['body']
 
     def test_multi_part_only_other_text(self):
         """Test multi part emails with only other text."""
@@ -132,8 +138,11 @@ class EmailContentSensor(unittest.TestCase):
             ['sender@test.com'], None)
 
         sensor.entity_id = 'sensor.emailtest'
-        sensor.update()
-        self.assertEqual("Test Message", sensor.state)
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
+        assert 'Link' == sensor.state
+        assert "Test Message" == \
+            sensor.device_state_attributes['body']
 
     def test_multiple_emails(self):
         """Test multiple emails."""
@@ -151,12 +160,8 @@ class EmailContentSensor(unittest.TestCase):
         test_message2['Date'] = datetime.datetime(2016, 1, 1, 12, 44, 57)
         test_message2.set_payload("Test Message 2")
 
-        states_received = Event()
-
         def state_changed_listener(entity_id, from_s, to_s):
             states.append(to_s)
-            if len(states) == 2:
-                states_received.set()
 
         track_state_change(
             self.hass, ['sensor.emailtest'], state_changed_listener)
@@ -167,15 +172,17 @@ class EmailContentSensor(unittest.TestCase):
             'test_emails_sensor', ['sender@test.com'], None)
 
         sensor.entity_id = 'sensor.emailtest'
-        sensor.update()
 
+        sensor.schedule_update_ha_state(True)
         self.hass.block_till_done()
-        states_received.wait(5)
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
 
-        self.assertEqual("Test Message", states[0].state)
-        self.assertEqual("Test Message 2", states[1].state)
+        assert "Test" == states[0].state
+        assert "Test 2" == states[1].state
 
-        self.assertEqual("Test Message 2", sensor.state)
+        assert "Test Message 2" == \
+            sensor.device_state_attributes['body']
 
     def test_sender_not_allowed(self):
         """Test not whitelisted emails."""
@@ -190,8 +197,9 @@ class EmailContentSensor(unittest.TestCase):
             'test_emails_sensor', ['other@test.com'], None)
 
         sensor.entity_id = 'sensor.emailtest'
-        sensor.update()
-        self.assertEqual(None, sensor.state)
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
+        assert sensor.state is None
 
     def test_template(self):
         """Test value template."""
@@ -208,7 +216,7 @@ class EmailContentSensor(unittest.TestCase):
                      self.hass))
 
         sensor.entity_id = 'sensor.emailtest'
-        sensor.update()
-        self.assertEqual(
-            "Test from sender@test.com with message Test Message",
-            sensor.state)
+        sensor.schedule_update_ha_state(True)
+        self.hass.block_till_done()
+        assert "Test from sender@test.com with message Test Message" == \
+            sensor.state

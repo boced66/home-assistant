@@ -1,23 +1,23 @@
 """
-Component that will help set the openalpr local for alpr processing.
+Component that will help set the OpenALPR local for ALPR processing.
 
-For more details about this component, please refer to the documentation at
+For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/image_processing.openalpr_local/
 """
 import asyncio
-import logging
 import io
+import logging
 import re
 
 import voluptuous as vol
 
-from homeassistant.core import split_entity_id, callback
-from homeassistant.const import STATE_UNKNOWN
 import homeassistant.helpers.config_validation as cv
+from homeassistant.core import split_entity_id, callback
+from homeassistant.const import CONF_REGION
 from homeassistant.components.image_processing import (
     PLATFORM_SCHEMA, ImageProcessingEntity, CONF_CONFIDENCE, CONF_SOURCE,
     CONF_ENTITY_ID, CONF_NAME, ATTR_ENTITY_ID, ATTR_CONFIDENCE)
-from homeassistant.util.async import run_callback_threadsafe
+from homeassistant.util.async_ import run_callback_threadsafe
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,22 +45,19 @@ OPENALPR_REGIONS = [
     'vn2'
 ]
 
-
-CONF_REGION = 'region'
 CONF_ALPR_BIN = 'alp_bin'
 
 DEFAULT_BINARY = 'alpr'
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_REGION):
-        vol.All(vol.Lower, vol.In(OPENALPR_REGIONS)),
+    vol.Required(CONF_REGION): vol.All(vol.Lower, vol.In(OPENALPR_REGIONS)),
     vol.Optional(CONF_ALPR_BIN, default=DEFAULT_BINARY): cv.string,
 })
 
 
-@asyncio.coroutine
-def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
-    """Set up the openalpr local platform."""
+async def async_setup_platform(hass, config, async_add_entities,
+                               discovery_info=None):
+    """Set up the OpenALPR local platform."""
     command = [config[CONF_ALPR_BIN], '-c', config[CONF_REGION], '-']
     confidence = config[CONF_CONFIDENCE]
 
@@ -70,22 +67,22 @@ def async_setup_platform(hass, config, async_add_devices, discovery_info=None):
             camera[CONF_ENTITY_ID], command, confidence, camera.get(CONF_NAME)
         ))
 
-    yield from async_add_devices(entities)
+    async_add_entities(entities)
 
 
 class ImageProcessingAlprEntity(ImageProcessingEntity):
-    """Base entity class for alpr image processing."""
+    """Base entity class for ALPR image processing."""
 
     def __init__(self):
-        """Initialize base alpr entity."""
-        self.plates = {}  # last scan data
-        self.vehicles = 0  # vehicles count
+        """Initialize base ALPR entity."""
+        self.plates = {}
+        self.vehicles = 0
 
     @property
     def state(self):
         """Return the state of the entity."""
         confidence = 0
-        plate = STATE_UNKNOWN
+        plate = None
 
         # search high plate
         for i_pl, i_co in self.plates.items():
@@ -93,6 +90,11 @@ class ImageProcessingAlprEntity(ImageProcessingEntity):
                 confidence = i_co
                 plate = i_pl
         return plate
+
+    @property
+    def device_class(self):
+        """Return the class of this device, from component DEVICE_CLASSES."""
+        return 'alpr'
 
     @property
     def state_attributes(self):
@@ -123,7 +125,7 @@ class ImageProcessingAlprEntity(ImageProcessingEntity):
                   if confidence >= self.confidence}
         new_plates = set(plates) - set(self.plates)
 
-        # send events
+        # Send events
         for i_plate in new_plates:
             self.hass.async_add_job(
                 self.hass.bus.async_fire, EVENT_FOUND_PLATE, {
@@ -133,16 +135,16 @@ class ImageProcessingAlprEntity(ImageProcessingEntity):
                 }
             )
 
-        # update entity store
+        # Update entity store
         self.plates = plates
         self.vehicles = vehicles
 
 
 class OpenAlprLocalEntity(ImageProcessingAlprEntity):
-    """OpenAlpr local api entity."""
+    """OpenALPR local api entity."""
 
     def __init__(self, camera_entity, command, confidence, name=None):
-        """Initialize openalpr local api."""
+        """Initialize OpenALPR local API."""
         super().__init__()
 
         self._cmd = command
@@ -170,8 +172,7 @@ class OpenAlprLocalEntity(ImageProcessingAlprEntity):
         """Return the name of the entity."""
         return self._name
 
-    @asyncio.coroutine
-    def async_process_image(self, image):
+    async def async_process_image(self, image):
         """Process image.
 
         This method is a coroutine.
@@ -179,7 +180,7 @@ class OpenAlprLocalEntity(ImageProcessingAlprEntity):
         result = {}
         vehicles = 0
 
-        alpr = yield from asyncio.create_subprocess_exec(
+        alpr = await asyncio.create_subprocess_exec(
             *self._cmd,
             loop=self.hass.loop,
             stdin=asyncio.subprocess.PIPE,
@@ -187,8 +188,8 @@ class OpenAlprLocalEntity(ImageProcessingAlprEntity):
             stderr=asyncio.subprocess.DEVNULL
         )
 
-        # send image
-        stdout, _ = yield from alpr.communicate(input=image)
+        # Send image
+        stdout, _ = await alpr.communicate(input=image)
         stdout = io.StringIO(str(stdout, 'utf-8'))
 
         while True:
@@ -199,12 +200,12 @@ class OpenAlprLocalEntity(ImageProcessingAlprEntity):
             new_plates = RE_ALPR_PLATE.search(line)
             new_result = RE_ALPR_RESULT.search(line)
 
-            # found new vehicle
+            # Found new vehicle
             if new_plates:
                 vehicles += 1
                 continue
 
-            # found plate result
+            # Found plate result
             if new_result:
                 try:
                     result.update(

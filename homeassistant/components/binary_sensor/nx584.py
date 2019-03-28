@@ -40,8 +40,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 })
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the NX584 binary sensor platform."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the NX584 binary sensor platform."""
     from nx584 import client as nx584_client
 
     host = config.get(CONF_HOST)
@@ -53,7 +53,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         client = nx584_client.Client('http://{}:{}'.format(host, port))
         zones = client.list_zones()
     except requests.exceptions.ConnectionError as ex:
-        _LOGGER.error('Unable to connect to NX584: %s', str(ex))
+        _LOGGER.error("Unable to connect to NX584: %s", str(ex))
         return False
 
     version = [int(v) for v in client.get_version().split('.')]
@@ -68,7 +68,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         for zone in zones
         if zone['number'] not in exclude}
     if zone_sensors:
-        add_devices(zone_sensors.values())
+        add_entities(zone_sensors.values())
         watcher = NX584Watcher(client, zone_sensors)
         watcher.start()
     else:

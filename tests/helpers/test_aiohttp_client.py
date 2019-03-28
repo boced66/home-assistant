@@ -3,20 +3,34 @@ import asyncio
 import unittest
 
 import aiohttp
+import pytest
 
 from homeassistant.core import EVENT_HOMEASSISTANT_CLOSE
-from homeassistant.bootstrap import setup_component
+from homeassistant.setup import async_setup_component
 import homeassistant.helpers.aiohttp_client as client
-from homeassistant.util.async import run_callback_threadsafe
+from homeassistant.util.async_ import run_callback_threadsafe
 
 from tests.common import get_test_home_assistant
+
+
+@pytest.fixture
+def camera_client(hass, hass_client):
+    """Fixture to fetch camera streams."""
+    assert hass.loop.run_until_complete(async_setup_component(hass, 'camera', {
+        'camera': {
+            'name': 'config_test',
+            'platform': 'mjpeg',
+            'mjpeg_url': 'http://example.com/mjpeg_stream',
+        }}))
+
+    yield hass.loop.run_until_complete(hass_client())
 
 
 class TestHelpersAiohttpClient(unittest.TestCase):
     """Test homeassistant.helpers.aiohttp_client module."""
 
     def setup_method(self, method):
-        """Setup things to be run when tests are started."""
+        """Set up things to be run when tests are started."""
         self.hass = get_test_home_assistant()
 
     def teardown_method(self, method):
@@ -119,61 +133,37 @@ class TestHelpersAiohttpClient(unittest.TestCase):
 
 
 @asyncio.coroutine
-def test_fetching_url(aioclient_mock, hass, test_client):
+def test_async_aiohttp_proxy_stream(aioclient_mock, camera_client):
     """Test that it fetches the given url."""
-    aioclient_mock.get('http://example.com/mjpeg_stream', content=[
-        b'Frame1', b'Frame2', b'Frame3'
-    ])
+    aioclient_mock.get('http://example.com/mjpeg_stream',
+                       content=b'Frame1Frame2Frame3')
 
-    def setup_platform():
-        """Setup the platform."""
-        assert setup_component(hass, 'camera', {
-            'camera': {
-                'name': 'config_test',
-                'platform': 'mjpeg',
-                'mjpeg_url': 'http://example.com/mjpeg_stream',
-            }})
-
-    yield from hass.loop.run_in_executor(None, setup_platform)
-
-    client = yield from test_client(hass.http.app)
-
-    resp = yield from client.get('/api/camera_proxy_stream/camera.config_test')
+    resp = yield from camera_client.get(
+        '/api/camera_proxy_stream/camera.config_test')
 
     assert resp.status == 200
     assert aioclient_mock.call_count == 1
     body = yield from resp.text()
-    assert body == 'Frame3Frame2Frame1'
+    assert body == 'Frame1Frame2Frame3'
 
-    aioclient_mock.clear_requests()
+
+@asyncio.coroutine
+def test_async_aiohttp_proxy_stream_timeout(aioclient_mock, camera_client):
+    """Test that it fetches the given url."""
     aioclient_mock.get(
-        'http://example.com/mjpeg_stream', exc=asyncio.TimeoutError(),
-        content=[b'Frame1', b'Frame2', b'Frame3'])
+        'http://example.com/mjpeg_stream', exc=asyncio.TimeoutError())
 
-    resp = yield from client.get('/api/camera_proxy_stream/camera.config_test')
+    resp = yield from camera_client.get(
+        '/api/camera_proxy_stream/camera.config_test')
+    assert resp.status == 504
 
-    assert resp.status == 200
-    body = yield from resp.text()
-    assert body == ''
 
-    aioclient_mock.clear_requests()
+@asyncio.coroutine
+def test_async_aiohttp_proxy_stream_client_err(aioclient_mock, camera_client):
+    """Test that it fetches the given url."""
     aioclient_mock.get(
-        'http://example.com/mjpeg_stream', exc=asyncio.CancelledError(),
-        content=[b'Frame1', b'Frame2', b'Frame3'])
+        'http://example.com/mjpeg_stream', exc=aiohttp.ClientError())
 
-    resp = yield from client.get('/api/camera_proxy_stream/camera.config_test')
-
-    assert resp.status == 200
-    body = yield from resp.text()
-    assert body == ''
-
-    aioclient_mock.clear_requests()
-    aioclient_mock.get(
-        'http://example.com/mjpeg_stream', exc=aiohttp.errors.ClientError(),
-        content=[b'Frame1', b'Frame2', b'Frame3'])
-
-    resp = yield from client.get('/api/camera_proxy_stream/camera.config_test')
-
-    assert resp.status == 200
-    body = yield from resp.text()
-    assert body == ''
+    resp = yield from camera_client.get(
+        '/api/camera_proxy_stream/camera.config_test')
+    assert resp.status == 502

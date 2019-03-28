@@ -11,19 +11,22 @@ PACKAGES=(
 
 apt-get install -y --no-install-recommends ${PACKAGES[@]}
 
+cd /usr/src/app/
+mkdir -p build && cd build
+
 # Clone the latest code from GitHub
-git clone https://github.com/openalpr/openalpr.git /usr/local/src/openalpr
+git clone --depth 1 https://github.com/openalpr/openalpr.git openalpr
 
 # Setup the build directory
-cd /usr/local/src/openalpr/src
+cd openalpr/src/
 mkdir -p build
 cd build
 
 # Setup the compile environment
-cmake -DWITH_TEST=FALSE -DWITH_BINDING_JAVA=FALSE --DWITH_BINDING_PYTHON=FALSE --DWITH_BINDING_GO=FALSE -DWITH_DAEMON=FALSE -DCMAKE_INSTALL_PREFIX:PATH=/usr/local ..
+cmake -DWITH_TESTS=FALSE -DWITH_BINDING_JAVA=FALSE --DWITH_BINDING_PYTHON=FALSE --DWITH_BINDING_GO=FALSE -DWITH_DAEMON=FALSE -DCMAKE_INSTALL_PREFIX:PATH=/usr/local ..
 
 # compile the library
-make
+make -j$(nproc)
 
 # Install the binaries/libraries to your local system (prefix is /usr/local)
 make install

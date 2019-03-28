@@ -1,19 +1,20 @@
 """
 Support for the demo image processing.
 
-For more details about this component, please refer to the documentation at
+For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/demo/
 """
-from homeassistant.components.image_processing import ATTR_CONFIDENCE
+from homeassistant.components.image_processing import (
+    ImageProcessingFaceEntity, ATTR_CONFIDENCE, ATTR_NAME, ATTR_AGE,
+    ATTR_GENDER
+    )
 from homeassistant.components.image_processing.openalpr_local import (
     ImageProcessingAlprEntity)
-from homeassistant.components.image_processing.microsoft_face_identify import (
-    ImageProcessingFaceEntity, ATTR_NAME, ATTR_AGE, ATTR_GENDER)
 
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the demo image_processing platform."""
-    add_devices([
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the demo image processing platform."""
+    add_entities([
         DemoImageProcessingAlpr('camera.demo_camera', "Demo Alpr"),
         DemoImageProcessingFace(
             'camera.demo_camera', "Demo Face")
@@ -21,10 +22,10 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 
 
 class DemoImageProcessingAlpr(ImageProcessingAlprEntity):
-    """Demo alpr image processing entity."""
+    """Demo ALPR image processing entity."""
 
     def __init__(self, camera_entity, name):
-        """Initialize demo alpr."""
+        """Initialize demo ALPR image processing entity."""
         super().__init__()
 
         self._name = name
@@ -61,7 +62,7 @@ class DemoImageProcessingFace(ImageProcessingFaceEntity):
     """Demo face identify image processing entity."""
 
     def __init__(self, camera_entity, name):
-        """Initialize demo alpr."""
+        """Initialize demo face image processing entity."""
         super().__init__()
 
         self._name = name

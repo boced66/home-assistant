@@ -1,12 +1,15 @@
 """Helpers for listening to events."""
-import functools as ft
 from datetime import timedelta
+import functools as ft
 
+from homeassistant.loader import bind_hass
+from homeassistant.helpers.sun import get_astral_event_next
 from ..core import HomeAssistant, callback
 from ..const import (
-    ATTR_NOW, EVENT_STATE_CHANGED, EVENT_TIME_CHANGED, MATCH_ALL)
+    ATTR_NOW, EVENT_STATE_CHANGED, EVENT_TIME_CHANGED, MATCH_ALL,
+    SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET)
 from ..util import dt as dt_util
-from ..util.async import run_callback_threadsafe
+from ..util.async_ import run_callback_threadsafe
 
 # PyLint does not like the use of threaded_listener_factory
 # pylint: disable=invalid-name
@@ -34,6 +37,8 @@ def threaded_listener_factory(async_factory):
     return factory
 
 
+@callback
+@bind_hass
 def async_track_state_change(hass, entity_ids, action, from_state=None,
                              to_state=None):
     """Track specific state changes.
@@ -45,8 +50,8 @@ def async_track_state_change(hass, entity_ids, action, from_state=None,
 
     Must be run within the event loop.
     """
-    from_state = _process_state_match(from_state)
-    to_state = _process_state_match(to_state)
+    match_from_state = _process_state_match(from_state)
+    match_to_state = _process_state_match(to_state)
 
     # Ensure it is a lowercase list with entity ids we want to match on
     if entity_ids == MATCH_ALL:
@@ -58,22 +63,20 @@ def async_track_state_change(hass, entity_ids, action, from_state=None,
 
     @callback
     def state_change_listener(event):
-        """The listener that listens for specific state changes."""
+        """Handle specific state changes."""
         if entity_ids != MATCH_ALL and \
            event.data.get('entity_id') not in entity_ids:
             return
 
-        if event.data.get('old_state') is not None:
-            old_state = event.data['old_state'].state
-        else:
-            old_state = None
+        old_state = event.data.get('old_state')
+        if old_state is not None:
+            old_state = old_state.state
 
-        if event.data.get('new_state') is not None:
-            new_state = event.data['new_state'].state
-        else:
-            new_state = None
+        new_state = event.data.get('new_state')
+        if new_state is not None:
+            new_state = new_state.state
 
-        if _matcher(old_state, from_state) and _matcher(new_state, to_state):
+        if match_from_state(old_state) and match_to_state(new_state):
             hass.async_run_job(action, event.data.get('entity_id'),
                                event.data.get('old_state'),
                                event.data.get('new_state'))
@@ -84,6 +87,8 @@ def async_track_state_change(hass, entity_ids, action, from_state=None,
 track_state_change = threaded_listener_factory(async_track_state_change)
 
 
+@callback
+@bind_hass
 def async_track_template(hass, template, action, variables=None):
     """Add a listener that track state changes with template condition."""
     from . import condition
@@ -105,12 +110,65 @@ def async_track_template(hass, template, action, variables=None):
             already_triggered = False
 
     return async_track_state_change(
-        hass, template.extract_entities(), template_condition_listener)
+        hass, template.extract_entities(variables),
+        template_condition_listener)
 
 
 track_template = threaded_listener_factory(async_track_template)
 
 
+@callback
+@bind_hass
+def async_track_same_state(hass, period, action, async_check_same_func,
+                           entity_ids=MATCH_ALL):
+    """Track the state of entities for a period and run an action.
+
+    If async_check_func is None it use the state of orig_value.
+    Without entity_ids we track all state changes.
+    """
+    async_remove_state_for_cancel = None
+    async_remove_state_for_listener = None
+
+    @callback
+    def clear_listener():
+        """Clear all unsub listener."""
+        nonlocal async_remove_state_for_cancel, async_remove_state_for_listener
+
+        if async_remove_state_for_listener is not None:
+            async_remove_state_for_listener()
+            async_remove_state_for_listener = None
+        if async_remove_state_for_cancel is not None:
+            async_remove_state_for_cancel()
+            async_remove_state_for_cancel = None
+
+    @callback
+    def state_for_listener(now):
+        """Fire on state changes after a delay and calls action."""
+        nonlocal async_remove_state_for_listener
+        async_remove_state_for_listener = None
+        clear_listener()
+        hass.async_run_job(action)
+
+    @callback
+    def state_for_cancel_listener(entity, from_state, to_state):
+        """Fire on changes and cancel for listener if changed."""
+        if not async_check_same_func(entity, from_state, to_state):
+            clear_listener()
+
+    async_remove_state_for_listener = async_track_point_in_utc_time(
+        hass, state_for_listener, dt_util.utcnow() + period)
+
+    async_remove_state_for_cancel = async_track_state_change(
+        hass, entity_ids, state_for_cancel_listener)
+
+    return clear_listener
+
+
+track_same_state = threaded_listener_factory(async_track_same_state)
+
+
+@callback
+@bind_hass
 def async_track_point_in_time(hass, action, point_in_time):
     """Add a listener that fires once after a specific point in time."""
     utc_point_in_time = dt_util.as_utc(point_in_time)
@@ -127,6 +185,8 @@ def async_track_point_in_time(hass, action, point_in_time):
 track_point_in_time = threaded_listener_factory(async_track_point_in_time)
 
 
+@callback
+@bind_hass
 def async_track_point_in_utc_time(hass, action, point_in_time):
     """Add a listener that fires once after a specific point in UTC time."""
     # Ensure point_in_time is UTC
@@ -160,6 +220,20 @@ track_point_in_utc_time = threaded_listener_factory(
     async_track_point_in_utc_time)
 
 
+@callback
+@bind_hass
+def async_call_later(hass, delay, action):
+    """Add a listener that is called in <delay>."""
+    return async_track_point_in_utc_time(
+        hass, action, dt_util.utcnow() + timedelta(seconds=delay))
+
+
+call_later = threaded_listener_factory(
+    async_call_later)
+
+
+@callback
+@bind_hass
 def async_track_time_interval(hass, action, interval):
     """Add a listener that fires repetitively at every timedelta interval."""
     remove = None
@@ -170,7 +244,7 @@ def async_track_time_interval(hass, action, interval):
 
     @callback
     def interval_listener(now):
-        """Called when when the interval has elapsed."""
+        """Handle elapsed intervals."""
         nonlocal remove
         remove = async_track_point_in_utc_time(
             hass, interval_listener, next_interval())
@@ -189,31 +263,24 @@ def async_track_time_interval(hass, action, interval):
 track_time_interval = threaded_listener_factory(async_track_time_interval)
 
 
+@callback
+@bind_hass
 def async_track_sunrise(hass, action, offset=None):
     """Add a listener that will fire a specified offset from sunrise daily."""
-    from homeassistant.components import sun
-    offset = offset or timedelta()
     remove = None
-
-    def next_rise():
-        """Return the next sunrise."""
-        next_time = sun.next_rising_utc(hass) + offset
-
-        while next_time < dt_util.utcnow():
-            next_time = next_time + timedelta(days=1)
-
-        return next_time
 
     @callback
     def sunrise_automation_listener(now):
-        """Called when it's time for action."""
+        """Handle points in time to execute actions."""
         nonlocal remove
         remove = async_track_point_in_utc_time(
-            hass, sunrise_automation_listener, next_rise())
+            hass, sunrise_automation_listener, get_astral_event_next(
+                hass, SUN_EVENT_SUNRISE, offset=offset))
         hass.async_run_job(action)
 
     remove = async_track_point_in_utc_time(
-        hass, sunrise_automation_listener, next_rise())
+        hass, sunrise_automation_listener, get_astral_event_next(
+            hass, SUN_EVENT_SUNRISE, offset=offset))
 
     def remove_listener():
         """Remove sunset listener."""
@@ -225,31 +292,24 @@ def async_track_sunrise(hass, action, offset=None):
 track_sunrise = threaded_listener_factory(async_track_sunrise)
 
 
+@callback
+@bind_hass
 def async_track_sunset(hass, action, offset=None):
     """Add a listener that will fire a specified offset from sunset daily."""
-    from homeassistant.components import sun
-    offset = offset or timedelta()
     remove = None
-
-    def next_set():
-        """Return next sunrise."""
-        next_time = sun.next_setting_utc(hass) + offset
-
-        while next_time < dt_util.utcnow():
-            next_time = next_time + timedelta(days=1)
-
-        return next_time
 
     @callback
     def sunset_automation_listener(now):
-        """Called when it's time for action."""
+        """Handle points in time to execute actions."""
         nonlocal remove
         remove = async_track_point_in_utc_time(
-            hass, sunset_automation_listener, next_set())
+            hass, sunset_automation_listener, get_astral_event_next(
+                hass, SUN_EVENT_SUNSET, offset=offset))
         hass.async_run_job(action)
 
     remove = async_track_point_in_utc_time(
-        hass, sunset_automation_listener, next_set())
+        hass, sunset_automation_listener, get_astral_event_next(
+            hass, SUN_EVENT_SUNSET, offset=offset))
 
     def remove_listener():
         """Remove sunset listener."""
@@ -261,13 +321,15 @@ def async_track_sunset(hass, action, offset=None):
 track_sunset = threaded_listener_factory(async_track_sunset)
 
 
-def async_track_utc_time_change(hass, action, year=None, month=None, day=None,
+@callback
+@bind_hass
+def async_track_utc_time_change(hass, action,
                                 hour=None, minute=None, second=None,
                                 local=False):
     """Add a listener that will fire if time matches a pattern."""
     # We do not have to wrap the function with time pattern matching logic
     # if no pattern given
-    if all(val is None for val in (year, month, day, hour, minute, second)):
+    if all(val is None for val in (hour, minute, second)):
         @callback
         def time_change_listener(event):
             """Fire every time event that comes in."""
@@ -275,29 +337,45 @@ def async_track_utc_time_change(hass, action, year=None, month=None, day=None,
 
         return hass.bus.async_listen(EVENT_TIME_CHANGED, time_change_listener)
 
-    pmp = _process_time_match
-    year, month, day = pmp(year), pmp(month), pmp(day)
-    hour, minute, second = pmp(hour), pmp(minute), pmp(second)
+    matching_seconds = dt_util.parse_time_expression(second, 0, 59)
+    matching_minutes = dt_util.parse_time_expression(minute, 0, 59)
+    matching_hours = dt_util.parse_time_expression(hour, 0, 23)
+
+    next_time = None
+
+    def calculate_next(now):
+        """Calculate and set the next time the trigger should fire."""
+        nonlocal next_time
+
+        localized_now = dt_util.as_local(now) if local else now
+        next_time = dt_util.find_next_time_expression_time(
+            localized_now, matching_seconds, matching_minutes,
+            matching_hours)
+
+    # Make sure rolling back the clock doesn't prevent the timer from
+    # triggering.
+    last_now = None
 
     @callback
     def pattern_time_change_listener(event):
         """Listen for matching time_changed events."""
+        nonlocal next_time, last_now
+
         now = event.data[ATTR_NOW]
 
-        if local:
-            now = dt_util.as_local(now)
-        mat = _matcher
+        if last_now is None or now < last_now:
+            # Time rolled back or next time not yet calculated
+            calculate_next(now)
 
-        # pylint: disable=too-many-boolean-expressions
-        if mat(now.year, year) and \
-           mat(now.month, month) and \
-           mat(now.day, day) and \
-           mat(now.hour, hour) and \
-           mat(now.minute, minute) and \
-           mat(now.second, second):
+        last_now = now
 
-            hass.async_run_job(action, now)
+        if next_time <= now:
+            hass.async_run_job(action, dt_util.as_local(now) if local else now)
+            calculate_next(now + timedelta(seconds=1))
 
+    # We can't use async_track_point_in_utc_time here because it would
+    # break in the case that the system time abruptly jumps backwards.
+    # Our custom last_now logic takes care of resolving that scenario.
     return hass.bus.async_listen(EVENT_TIME_CHANGED,
                                  pattern_time_change_listener)
 
@@ -305,47 +383,24 @@ def async_track_utc_time_change(hass, action, year=None, month=None, day=None,
 track_utc_time_change = threaded_listener_factory(async_track_utc_time_change)
 
 
-def async_track_time_change(hass, action, year=None, month=None, day=None,
-                            hour=None, minute=None, second=None):
+@callback
+@bind_hass
+def async_track_time_change(hass, action, hour=None, minute=None, second=None):
     """Add a listener that will fire if UTC time matches a pattern."""
-    return async_track_utc_time_change(hass, action, year, month, day, hour,
-                                       minute, second, local=True)
+    return async_track_utc_time_change(hass, action, hour, minute, second,
+                                       local=True)
 
 
 track_time_change = threaded_listener_factory(async_track_time_change)
 
 
 def _process_state_match(parameter):
-    """Wrap parameter in a tuple if it is not one and returns it."""
+    """Convert parameter to function that matches input against parameter."""
     if parameter is None or parameter == MATCH_ALL:
-        return MATCH_ALL
-    elif isinstance(parameter, str) or not hasattr(parameter, '__iter__'):
-        return (parameter,)
-    else:
-        return tuple(parameter)
+        return lambda _: True
 
+    if isinstance(parameter, str) or not hasattr(parameter, '__iter__'):
+        return lambda state: state == parameter
 
-def _process_time_match(parameter):
-    """Wrap parameter in a tuple if it is not one and returns it."""
-    if parameter is None or parameter == MATCH_ALL:
-        return MATCH_ALL
-    elif isinstance(parameter, str) and parameter.startswith('/'):
-        return parameter
-    elif isinstance(parameter, str) or not hasattr(parameter, '__iter__'):
-        return (parameter,)
-    else:
-        return tuple(parameter)
-
-
-def _matcher(subject, pattern):
-    """Return True if subject matches the pattern.
-
-    Pattern is either a tuple of allowed subjects or a `MATCH_ALL`.
-    """
-    if isinstance(pattern, str) and pattern.startswith('/'):
-        try:
-            return subject % float(pattern.lstrip('/')) == 0
-        except ValueError:
-            return False
-
-    return MATCH_ALL == pattern or subject in pattern
+    parameter = tuple(parameter)
+    return lambda state: state in parameter

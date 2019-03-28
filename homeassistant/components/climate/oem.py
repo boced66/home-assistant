@@ -13,21 +13,20 @@ import requests
 import voluptuous as vol
 
 # Import the device class from the component that you want to support
-from homeassistant.components.climate import (
-    ClimateDevice, PLATFORM_SCHEMA, STATE_HEAT, STATE_IDLE, ATTR_TEMPERATURE)
-from homeassistant.const import (CONF_HOST, CONF_USERNAME, CONF_PASSWORD,
-                                 CONF_PORT, TEMP_CELSIUS, CONF_NAME)
+from homeassistant.components.climate import ClimateDevice, PLATFORM_SCHEMA
+from homeassistant.components.climate.const import (
+    STATE_HEAT, STATE_IDLE, SUPPORT_TARGET_TEMPERATURE, SUPPORT_AWAY_MODE)
+from homeassistant.const import (
+    ATTR_TEMPERATURE, CONF_HOST, CONF_USERNAME, CONF_PASSWORD,
+    CONF_PORT, TEMP_CELSIUS, CONF_NAME)
 import homeassistant.helpers.config_validation as cv
 
-# Home Assistant depends on 3rd party packages for API specific code.
 REQUIREMENTS = ['oemthermostat==1.1']
 
 _LOGGER = logging.getLogger(__name__)
 
-# Local configs
 CONF_AWAY_TEMP = 'away_temp'
 
-# Validation of the user's configuration
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_HOST): cv.string,
     vol.Optional(CONF_NAME, default="Thermostat"): cv.string,
@@ -37,13 +36,13 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_AWAY_TEMP, default=14): vol.Coerce(float)
 })
 
+SUPPORT_FLAGS = SUPPORT_TARGET_TEMPERATURE | SUPPORT_AWAY_MODE
 
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup oemthermostat."""
+
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the oemthermostat platform."""
     from oemthermostat import Thermostat
 
-    # Assign configuration variables. The configuration check takes care they
-    # are present.
     name = config.get(CONF_NAME)
     host = config.get(CONF_HOST)
     port = config.get(CONF_PORT)
@@ -51,20 +50,17 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     password = config.get(CONF_PASSWORD)
     away_temp = config.get(CONF_AWAY_TEMP)
 
-    # If creating the class raises an exception, it failed to connect or
-    # something else went wrong.
     try:
-        therm = Thermostat(host, port=port,
-                           username=username, password=password)
+        therm = Thermostat(
+            host, port=port, username=username, password=password)
     except (ValueError, AssertionError, requests.RequestException):
         return False
 
-    # Add devices
-    add_devices((ThermostatDevice(hass, therm, name, away_temp), ), True)
+    add_entities((ThermostatDevice(hass, therm, name, away_temp), ), True)
 
 
 class ThermostatDevice(ClimateDevice):
-    """Interface class for the oemthermostat module and HA."""
+    """Interface class for the oemthermostat module."""
 
     def __init__(self, hass, thermostat, name, away_temp):
         """Initialize the device."""
@@ -86,13 +82,18 @@ class ThermostatDevice(ClimateDevice):
         self._setpoint = None
 
     @property
+    def supported_features(self):
+        """Return the list of supported features."""
+        return SUPPORT_FLAGS
+
+    @property
     def name(self):
-        """Name of this Thermostat."""
+        """Return the name of this Thermostat."""
         return self._name
 
     @property
     def temperature_unit(self):
-        """The unit of measurement used by the platform."""
+        """Return the unit of measurement used by the platform."""
         return TEMP_CELSIUS
 
     @property
@@ -100,8 +101,7 @@ class ThermostatDevice(ClimateDevice):
         """Return current operation i.e. heat, cool, idle."""
         if self._state:
             return STATE_HEAT
-        else:
-            return STATE_IDLE
+        return STATE_IDLE
 
     @property
     def current_temperature(self):
@@ -114,7 +114,7 @@ class ThermostatDevice(ClimateDevice):
         return self._setpoint
 
     def set_temperature(self, **kwargs):
-        """Change the setpoint of the thermostat."""
+        """Set the temperature."""
         # If we are setting the temp, then we don't want away mode anymore.
         self.turn_away_mode_off()
 

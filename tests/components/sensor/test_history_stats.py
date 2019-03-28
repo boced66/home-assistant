@@ -1,16 +1,20 @@
 """The test for the History Statistics sensor platform."""
 # pylint: disable=protected-access
+from datetime import datetime, timedelta
 import unittest
-from datetime import timedelta
 from unittest.mock import patch
+import pytest
+import pytz
+from homeassistant.helpers import template
 
-import homeassistant.components.recorder as recorder
-import homeassistant.core as ha
-import homeassistant.util.dt as dt_util
-from homeassistant.bootstrap import setup_component
+from homeassistant.const import STATE_UNKNOWN
+from homeassistant.setup import setup_component
 from homeassistant.components.sensor.history_stats import HistoryStatsSensor
+import homeassistant.core as ha
 from homeassistant.helpers.template import Template
-from tests.common import get_test_home_assistant
+import homeassistant.util.dt as dt_util
+
+from tests.common import init_recorder_component, get_test_home_assistant
 
 
 class TestHistoryStatsSensor(unittest.TestCase):
@@ -41,43 +45,64 @@ class TestHistoryStatsSensor(unittest.TestCase):
             }
         }
 
-        self.assertTrue(setup_component(self.hass, 'sensor', config))
+        assert setup_component(self.hass, 'sensor', config)
 
-        state = self.hass.states.get('sensor.test').as_dict()
-        self.assertEqual(state['state'], '0')
+        state = self.hass.states.get('sensor.test')
+        assert state.state == STATE_UNKNOWN
 
     def test_period_parsing(self):
         """Test the conversion from templates to period."""
-        today = Template('{{ now().replace(hour=0).replace(minute=0)'
-                         '.replace(second=0) }}', self.hass)
-        duration = timedelta(hours=2, minutes=1)
+        now = datetime(2019, 1, 1, 23, 30, 0, tzinfo=pytz.utc)
+        with patch.dict(template.ENV.globals, {'now': lambda: now}):
+            today = Template('{{ now().replace(hour=0).replace(minute=0)'
+                             '.replace(second=0) }}', self.hass)
+            duration = timedelta(hours=2, minutes=1)
 
-        sensor1 = HistoryStatsSensor(
-            self.hass, 'test', 'on', today, None, duration, 'test')
-        sensor2 = HistoryStatsSensor(
-            self.hass, 'test', 'on', None, today, duration, 'test')
+            sensor1 = HistoryStatsSensor(
+                self.hass, 'test', 'on', today, None, duration, 'time', 'test')
+            sensor2 = HistoryStatsSensor(
+                self.hass, 'test', 'on', None, today, duration, 'time', 'test')
 
-        sensor1.update_period()
-        sensor2.update_period()
+            sensor1.update_period()
+            sensor1_start, sensor1_end = sensor1._period
+            sensor2.update_period()
+            sensor2_start, sensor2_end = sensor2._period
 
-        self.assertEqual(
-            sensor1.device_state_attributes['from'][-8:], '00:00:00')
-        self.assertEqual(
-            sensor1.device_state_attributes['to'][-8:], '02:01:00')
-        self.assertEqual(
-            sensor2.device_state_attributes['from'][-8:], '21:59:00')
-        self.assertEqual(
-            sensor2.device_state_attributes['to'][-8:], '00:00:00')
+        # Start = 00:00:00
+        assert sensor1_start.hour == 0
+        assert sensor1_start.minute == 0
+        assert sensor1_start.second == 0
+
+        # End = 02:01:00
+        assert sensor1_end.hour == 2
+        assert sensor1_end.minute == 1
+        assert sensor1_end.second == 0
+
+        # Start = 21:59:00
+        assert sensor2_start.hour == 21
+        assert sensor2_start.minute == 59
+        assert sensor2_start.second == 0
+
+        # End = 00:00:00
+        assert sensor2_end.hour == 0
+        assert sensor2_end.minute == 0
+        assert sensor2_end.second == 0
 
     def test_measure(self):
         """Test the history statistics sensor measure."""
-        later = dt_util.utcnow() - timedelta(seconds=15)
-        earlier = later - timedelta(minutes=30)
+        t0 = dt_util.utcnow() - timedelta(minutes=40)
+        t1 = t0 + timedelta(minutes=20)
+        t2 = dt_util.utcnow() - timedelta(minutes=10)
+
+        # Start     t0        t1        t2        End
+        # |--20min--|--20min--|--10min--|--10min--|
+        # |---off---|---on----|---off---|---on----|
 
         fake_states = {
             'binary_sensor.test_id': [
-                ha.State('binary_sensor.test_id', 'on', last_changed=earlier),
-                ha.State('binary_sensor.test_id', 'off', last_changed=later),
+                ha.State('binary_sensor.test_id', 'on', last_changed=t0),
+                ha.State('binary_sensor.test_id', 'off', last_changed=t1),
+                ha.State('binary_sensor.test_id', 'on', last_changed=t2),
             ]
         }
 
@@ -85,10 +110,23 @@ class TestHistoryStatsSensor(unittest.TestCase):
         end = Template('{{ now() }}', self.hass)
 
         sensor1 = HistoryStatsSensor(
-            self.hass, 'binary_sensor.test_id', 'on', start, end, None, 'Test')
+            self.hass, 'binary_sensor.test_id', 'on', start, end, None,
+            'time', 'Test')
 
         sensor2 = HistoryStatsSensor(
-            self.hass, 'unknown.id', 'on', start, end, None, 'Test')
+            self.hass, 'unknown.id', 'on', start, end, None, 'time', 'Test')
+
+        sensor3 = HistoryStatsSensor(
+            self.hass, 'binary_sensor.test_id', 'on', start, end, None,
+            'count', 'test')
+
+        sensor4 = HistoryStatsSensor(
+            self.hass, 'binary_sensor.test_id', 'on', start, end, None,
+            'ratio', 'test')
+
+        assert sensor1._type == 'time'
+        assert sensor3._type == 'count'
+        assert sensor4._type == 'ratio'
 
         with patch('homeassistant.components.history.'
                    'state_changes_during_period', return_value=fake_states):
@@ -96,10 +134,13 @@ class TestHistoryStatsSensor(unittest.TestCase):
                        return_value=None):
                 sensor1.update()
                 sensor2.update()
+                sensor3.update()
+                sensor4.update()
 
-        self.assertEqual(sensor1.value, 0.5)
-        self.assertEqual(sensor2.value, 0)
-        self.assertEqual(sensor1.device_state_attributes['ratio'], '50.0%')
+        assert sensor1.state == 0.5
+        assert sensor2.state is None
+        assert sensor3.state == 2
+        assert sensor4.state == 50
 
     def test_wrong_date(self):
         """Test when start or end value is not a timestamp or a date."""
@@ -107,9 +148,9 @@ class TestHistoryStatsSensor(unittest.TestCase):
         bad = Template('{{ TEST }}', self.hass)
 
         sensor1 = HistoryStatsSensor(
-            self.hass, 'test', 'on', good, bad, None, 'Test')
+            self.hass, 'test', 'on', good, bad, None, 'time', 'Test')
         sensor2 = HistoryStatsSensor(
-            self.hass, 'test', 'on', bad, good, None, 'Test')
+            self.hass, 'test', 'on', bad, good, None, 'time', 'Test')
 
         before_update1 = sensor1._period
         before_update2 = sensor2._period
@@ -117,8 +158,8 @@ class TestHistoryStatsSensor(unittest.TestCase):
         sensor1.update_period()
         sensor2.update_period()
 
-        self.assertEqual(before_update1, sensor1._period)
-        self.assertEqual(before_update2, sensor2._period)
+        assert before_update1 == sensor1._period
+        assert before_update2 == sensor2._period
 
     def test_wrong_duration(self):
         """Test when duration value is not a timedelta."""
@@ -137,9 +178,9 @@ class TestHistoryStatsSensor(unittest.TestCase):
         }
 
         setup_component(self.hass, 'sensor', config)
-        self.assertEqual(self.hass.states.get('sensor.test'), None)
-        self.assertRaises(TypeError,
-                          setup_component(self.hass, 'sensor', config))
+        assert self.hass.states.get('sensor.test')is None
+        with pytest.raises(TypeError):
+            setup_component(self.hass, 'sensor', config)()
 
     def test_bad_template(self):
         """Test Exception when the template cannot be parsed."""
@@ -147,9 +188,9 @@ class TestHistoryStatsSensor(unittest.TestCase):
         duration = '01:00'
 
         sensor1 = HistoryStatsSensor(
-            self.hass, 'test', 'on', bad, None, duration, 'Test')
+            self.hass, 'test', 'on', bad, None, duration, 'time', 'Test')
         sensor2 = HistoryStatsSensor(
-            self.hass, 'test', 'on', None, bad, duration, 'Test')
+            self.hass, 'test', 'on', None, bad, duration, 'time', 'Test')
 
         before_update1 = sensor1._period
         before_update2 = sensor2._period
@@ -157,8 +198,8 @@ class TestHistoryStatsSensor(unittest.TestCase):
         sensor1.update_period()
         sensor2.update_period()
 
-        self.assertEqual(before_update1, sensor1._period)
-        self.assertEqual(before_update2, sensor2._period)
+        assert before_update1 == sensor1._period
+        assert before_update2 == sensor2._period
 
     def test_not_enough_arguments(self):
         """Test config when not enough arguments provided."""
@@ -176,9 +217,9 @@ class TestHistoryStatsSensor(unittest.TestCase):
         }
 
         setup_component(self.hass, 'sensor', config)
-        self.assertEqual(self.hass.states.get('sensor.test'), None)
-        self.assertRaises(TypeError,
-                          setup_component(self.hass, 'sensor', config))
+        assert self.hass.states.get('sensor.test')is None
+        with pytest.raises(TypeError):
+            setup_component(self.hass, 'sensor', config)()
 
     def test_too_many_arguments(self):
         """Test config when too many arguments provided."""
@@ -198,18 +239,11 @@ class TestHistoryStatsSensor(unittest.TestCase):
         }
 
         setup_component(self.hass, 'sensor', config)
-        self.assertEqual(self.hass.states.get('sensor.test'), None)
-        self.assertRaises(TypeError,
-                          setup_component(self.hass, 'sensor', config))
+        assert self.hass.states.get('sensor.test')is None
+        with pytest.raises(TypeError):
+            setup_component(self.hass, 'sensor', config)()
 
     def init_recorder(self):
         """Initialize the recorder."""
-        db_uri = 'sqlite://'
-        with patch('homeassistant.core.Config.path', return_value=db_uri):
-            setup_component(self.hass, recorder.DOMAIN, {
-                "recorder": {
-                    "db_url": db_uri}})
+        init_recorder_component(self.hass)
         self.hass.start()
-        recorder._INSTANCE.block_till_db_ready()
-        self.hass.block_till_done()
-        recorder._INSTANCE.block_till_done()

@@ -9,16 +9,15 @@ import logging
 import voluptuous as vol
 
 from homeassistant.components.media_player import (
-    SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PREVIOUS_TRACK,
-    SUPPORT_TURN_ON, SUPPORT_TURN_OFF, SUPPORT_SELECT_SOURCE,
-    SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_STEP, SUPPORT_PLAY,
-    SUPPORT_VOLUME_SET, MediaPlayerDevice, PLATFORM_SCHEMA)
-
+    MediaPlayerDevice, PLATFORM_SCHEMA)
+from homeassistant.components.media_player.const import (
+    SUPPORT_NEXT_TRACK, SUPPORT_PAUSE, SUPPORT_PLAY,
+    SUPPORT_PREVIOUS_TRACK, SUPPORT_SELECT_SOURCE, SUPPORT_TURN_OFF,
+    SUPPORT_TURN_ON, SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET,
+    SUPPORT_VOLUME_STEP)
 from homeassistant.const import (
-    CONF_HOST, CONF_NAME, STATE_OFF, STATE_ON, STATE_UNKNOWN,
-    CONF_PORT, CONF_USERNAME, CONF_PASSWORD, CONF_TIMEOUT)
-
-
+    CONF_HOST, CONF_NAME, CONF_PASSWORD, CONF_PORT, CONF_TIMEOUT,
+    CONF_USERNAME, STATE_OFF, STATE_ON)
 import homeassistant.helpers.config_validation as cv
 
 REQUIREMENTS = ['sharp_aquos_rc==0.3.2']
@@ -59,9 +58,8 @@ SOURCES = {0: 'TV / Antenna',
            8: 'PC_IN'}
 
 
-# pylint: disable=unused-argument
-def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Setup the Sharp Aquos TV platform."""
+def setup_platform(hass, config, add_entities, discovery_info=None):
+    """Set up the Sharp Aquos TV platform."""
     import sharp_aquos_rc
 
     name = config.get(CONF_NAME)
@@ -77,30 +75,21 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
             port = vals[1]
 
         host = vals[0]
-        remote = sharp_aquos_rc.TV(host,
-                                   port,
-                                   username,
-                                   password,
-                                   timeout=20)
-        add_devices([SharpAquosTVDevice(name, remote, power_on_enabled)])
+        remote = sharp_aquos_rc.TV(host, port, username, password, timeout=20)
+        add_entities([SharpAquosTVDevice(name, remote, power_on_enabled)])
         return True
 
     host = config.get(CONF_HOST)
-    remote = sharp_aquos_rc.TV(host,
-                               port,
-                               username,
-                               password,
-                               15,
-                               1)
+    remote = sharp_aquos_rc.TV(host, port, username, password, 15, 1)
 
-    add_devices([SharpAquosTVDevice(name, remote, power_on_enabled)])
+    add_entities([SharpAquosTVDevice(name, remote, power_on_enabled)])
     return True
 
 
 def _retry(func):
-    """Decorator to handle query retries."""
+    """Handle query retries."""
     def wrapper(obj, *args, **kwargs):
-        """Wrapper for all query functions."""
+        """Wrap all query functions."""
         update_retries = 5
         while update_retries > 0:
             try:
@@ -113,11 +102,9 @@ def _retry(func):
     return wrapper
 
 
-# pylint: disable=abstract-method
 class SharpAquosTVDevice(MediaPlayerDevice):
     """Representation of a Aquos TV."""
 
-    # pylint: disable=too-many-public-methods
     def __init__(self, name, remote, power_on_enabled=False):
         """Initialize the aquos device."""
         global SUPPORT_SHARPTV
@@ -128,7 +115,7 @@ class SharpAquosTVDevice(MediaPlayerDevice):
         self._name = name
         # Assume that the TV is not muted
         self._muted = False
-        self._state = STATE_UNKNOWN
+        self._state = None
         self._remote = remote
         self._volume = 0
         self._source = None
@@ -211,9 +198,9 @@ class SharpAquosTVDevice(MediaPlayerDevice):
         self._remote.volume(int(self._volume * 60) - 2)
 
     @_retry
-    def set_volume_level(self, level):
+    def set_volume_level(self, volume):
         """Set Volume media player."""
-        self._remote.volume(int(level * 60))
+        self._remote.volume(int(volume * 60))
 
     @_retry
     def mute_volume(self, mute):

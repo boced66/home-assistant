@@ -9,21 +9,18 @@ import urllib
 
 import voluptuous as vol
 
+from homeassistant.components.twilio import DATA_TWILIO
 import homeassistant.helpers.config_validation as cv
 from homeassistant.components.notify import (
     ATTR_TARGET, PLATFORM_SCHEMA, BaseNotificationService)
 
 _LOGGER = logging.getLogger(__name__)
-REQUIREMENTS = ["twilio==5.7.0"]
 
+DEPENDENCIES = ['twilio']
 
-CONF_ACCOUNT_SID = "account_sid"
-CONF_AUTH_TOKEN = "auth_token"
-CONF_FROM_NUMBER = "from_number"
+CONF_FROM_NUMBER = 'from_number'
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_ACCOUNT_SID): cv.string,
-    vol.Required(CONF_AUTH_TOKEN): cv.string,
     vol.Required(CONF_FROM_NUMBER):
         vol.All(cv.string, vol.Match(r"^\+?[1-9]\d{1,14}$")),
 })
@@ -31,14 +28,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 
 def get_service(hass, config, discovery_info=None):
     """Get the Twilio Call notification service."""
-    # pylint: disable=import-error
-    from twilio.rest import TwilioRestClient
-
-    twilio_client = TwilioRestClient(config[CONF_ACCOUNT_SID],
-                                     config[CONF_AUTH_TOKEN])
-
-    return TwilioCallNotificationService(twilio_client,
-                                         config[CONF_FROM_NUMBER])
+    return TwilioCallNotificationService(
+        hass.data[DATA_TWILIO], config[CONF_FROM_NUMBER])
 
 
 class TwilioCallNotificationService(BaseNotificationService):
@@ -51,7 +42,7 @@ class TwilioCallNotificationService(BaseNotificationService):
 
     def send_message(self, message="", **kwargs):
         """Call to specified target users."""
-        from twilio import TwilioRestException
+        from twilio.base.exceptions import TwilioRestException
 
         targets = kwargs.get(ATTR_TARGET)
 
@@ -67,8 +58,7 @@ class TwilioCallNotificationService(BaseNotificationService):
 
         for target in targets:
             try:
-                self.client.calls.create(to=target,
-                                         url=twimlet_url,
-                                         from_=self.from_number)
+                self.client.calls.create(
+                    to=target, url=twimlet_url, from_=self.from_number)
             except TwilioRestException as exc:
                 _LOGGER.error(exc)
